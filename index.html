@@ -163,10 +163,7 @@ tr.sep td{border-top:.6px solid var(--hair)}
 <h3>5.5&nbsp;&nbsp;Effect of tool execution on the measurement</h3>
 <p>Under an earlier protocol, additional tool calls after the replayed evidence received no response. Under that protocol the two models tied at 38/42. The fine-tuned model's errors were mostly empty answers following tool calls that were never answered. When the calls were executed, those answers became correct. An offline evaluation that does not execute tool calls therefore measures a model that is prevented from carrying out the behavior it was trained to perform. I treat tool execution as a requirement of the evaluation protocol, not an optional detail.</p>
 
-<h2>6&nbsp;&nbsp;Limitations</h2>
-<p>The held-out set contains 42 questions, and the difference between the matched runs is two of them. I report no confidence intervals or repeated runs. Retrieval is held fixed by design, so these results characterize the generator rather than the end-to-end system. Grading relies on an LLM grader with human review, and the review found at least one reference answer that contradicts its own question. The data come from a single firm and a single tax year. Finally, aggregate accuracy does not show that the model abstains when evidence is insufficient, or that it is robust to misleading retrieved content.</p>
-
-<h2>7&nbsp;&nbsp;Future work</h2>
+<h2>6&nbsp;&nbsp;Future work</h2>
 <p>None of the following has been run. I plan to:</p>
 <ol>
   <li>measure the rate of answers containing figures that no retrieved evidence supports;</li>
