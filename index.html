@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool-Use Fine-Tuning for Reliable Financial QA</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&family=Source+Code+Pro:wght@400;500&display=swap">
+<style>
+/* Layout: single-column preprint. Deliberately single-theme (white paper, black ink), like a typeset PDF. */
+:root{
+  --paper:#FFFFFF; --ink:#111111; --muted:#4A4A4A; --rule:#111111; --hair:#C9C9C9; --shade:#F3F3F1;
+  --f-text:"Source Serif 4","Times New Roman",Georgia,serif;
+  --f-mono:"Source Code Pro",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--f-text);font-size:16.5px;line-height:1.55;padding-inline:20px;hyphens:auto}
+.page{max-width:720px;margin:0 auto;padding-block:64px 96px}
+header{text-align:center;margin-bottom:28px}
+h1{font-size:25px;font-weight:700;line-height:1.25;margin:0 0 14px;text-wrap:balance}
+.author{font-size:16px;margin:0}
+.affil{font-size:14px;color:var(--muted);margin:2px 0 0}
+.date{font-size:14px;color:var(--muted);margin:8px 0 0}
+.abstract{margin:30px 40px 34px;font-size:15px;line-height:1.5}
+.abstract h2{all:unset;display:block;text-align:center;font-weight:700;font-size:15px;margin-bottom:6px}
+.abstract p{margin:0;text-align:justify}
+h2{font-size:18px;font-weight:700;margin:34px 0 10px}
+h3{font-size:16px;font-weight:700;font-style:normal;margin:22px 0 6px}
+p{margin:0 0 11px;text-align:justify}
+p + p{text-indent:1.4em}
+h2 + p, h3 + p, .tblwrap + p, ol + p, ul + p, .eq + p{text-indent:0}
+ol,ul{margin:0 0 12px;padding-left:26px}
+li{margin-bottom:4px}
+code,.m{font-family:var(--f-mono);font-size:.86em}
+.eq{text-align:center;margin:12px 0 14px;font-family:var(--f-mono);font-size:14.5px}
+.tblwrap{overflow-x:auto;margin:18px 0 20px}
+table{border-collapse:collapse;margin:0 auto;font-size:14.5px;font-variant-numeric:tabular-nums}
+caption{caption-side:top;text-align:left;font-size:14px;padding-bottom:8px;line-height:1.4}
+caption b{font-weight:700}
+thead tr:first-child th{border-top:1.6px solid var(--rule)}
+th{font-weight:600;text-align:left;padding:5px 14px;border-bottom:.8px solid var(--rule)}
+td{padding:4px 14px}
+tbody tr:last-child td{border-bottom:1.6px solid var(--rule)}
+td.r,th.r{text-align:right}
+tr.sep td{border-top:.6px solid var(--hair)}
+.fn{font-size:13.5px;color:var(--muted);border-top:.6px solid var(--hair);padding-top:8px;margin-top:36px}
+.fn p{text-align:left;text-indent:0}
+@media (max-width:560px){.abstract{margin-inline:0}p{text-align:left}}
+</style>
+</head>
+<body>
+
+<div class="page">
+<header>
+  <h1>Recovering Frontier-Level Reliability in a 9B Model Through Tool-Use Fine-Tuning for Financial Question Answering</h1>
+  <p class="author">Soham Samal</p>
+  <p class="affil">In collaboration with the AlphaTax engineering team</p>
+  <p class="date">October 2026</p>
+</header>
+
+<section class="abstract">
+  <h2>Abstract</h2>
+  <p>I study whether a 9B open-weight model, given the same retrieved evidence as a frontier model, can close most of the reliability gap on expert-authored tax questions by learning when to call tools rather than by acquiring domain knowledge. I build a supervised fine-tuning corpus from tool-calling sessions graded against CPA-written reference answers. The corpus is de-identified with entity-consistent placeholder tokens and augmented deterministically with calculator calls and search-recovery behavior. I train Qwen3.5-9B with QLoRA on sequences of up to 22.3k tokens; two exact chunked computations (attention and cross-entropy) make these lengths fit in memory. On 42 questions from clients excluded from training, with the model's calculator calls executed, the fine-tuned model answers 41 correctly, the base model 39, and no answer the base model got right is lost. A failure analysis over four base models attributes 54% of failure instances to arithmetic over figures that were already present in the evidence. Separately, I find that offline protocols that do not execute tool calls penalize the behavior the fine-tuning is meant to induce.</p>
+</section>
+
+<h2>1&nbsp;&nbsp;Problem setting</h2>
+<p>The task is question answering over a corpus of client tax documents: preparer-copy returns, information returns, and spreadsheet summaries. The model is served behind a Model Context Protocol (MCP) server. The server exposes a hybrid search tool with metadata filters (client folder, tax year) and a deterministic arithmetic tool. Retrieved text is de-identified at index time. Names appear as tokens such as <code>[PERSON_a1b2c3d4]</code>, which the model must reproduce verbatim. Answers are limited to two sentences, and every figure must be supported by retrieved evidence.</p>
+<p>Frontier models do well on the firm's 152-question benchmark, but deployment constraints favor a small model that can run on infrastructure the firm controls. The question I address is narrower than general capability: with the evidence held fixed, how much of the small-model deficit comes from tool-use behavior (filtering searches correctly, delegating arithmetic, committing to an answer), and how much can a small amount of supervised data recover?</p>
+
+<h2>2&nbsp;&nbsp;Division of work</h2>
+<p>The AlphaTax engineering team built and operates the ingestion and retrieval pipeline, the vector index, the MCP search server, and the benchmark harness. CPAs at the firm wrote the reference answers and difficulty ratings. I was responsible for the small-model work:</p>
+<ul>
+  <li>the data pipeline: ingestion, quality gates, de-identification, augmentation, and splitting;</li>
+  <li>the base-model sweep;</li>
+  <li>the training recipe and its memory-efficient kernels;</li>
+  <li>the offline and live-tool evaluation harnesses;</li>
+  <li>adding the deterministic <code>calculate</code> tool to the production MCP server;</li>
+  <li>the failure analyses.</li>
+</ul>
+
+<h2>3&nbsp;&nbsp;Data</h2>
+<h3>3.1&nbsp;&nbsp;Source and quality gates</h3>
+<p>The source data are recorded sessions of a frontier model answering the benchmark questions through the production search tool. Each record contains every tool call with its arguments, the raw tool responses, and the final answer. I retained a session only if it passed all of the following gates:</p>
+<ol>
+  <li>it was graded correct with a score of at least 90 of 100;</li>
+  <li>the question was not flagged as defective by the CPA review;</li>
+  <li>every tool argument validated against the JSON schema exported from the running MCP server;</li>
+  <li>the folder filter resolved to a known client directory;</li>
+  <li>there were no tool errors;</li>
+  <li>every numeric figure in the final answer was either present in a tool response or derivable from present figures by a sum, difference, or halving.</li>
+</ol>
+<p>Of 125 sessions with complete retrieval recall, 119 passed. Recorded tool responses were rewritten back into the exact shape the production search API returns, so the training text and the serving text are byte-compatible.</p>
+
+<h3>3.2&nbsp;&nbsp;De-identification</h3>
+<p>For human review, the recordings had been stored with names restored in place of the de-identification tokens. I re-applied de-identification using entities that are known for each session: client names parsed from file names (including joint filers), business names, and folder names. I then expanded these to orthographic variants, covering name orders, possessives, and the space-collapsed forms produced by the contextualization step. Each entity maps to a token derived from a hash of the entity, <code>[CLASS_h<sub>8</sub>]</code>, so the same entity receives the same token in every document. This preserves the coreference structure the model has to learn. A residual scan flags any session in which a known entity string survives replacement. The pass made 2,975 replacements and left two flags, both benign.</p>
+
+<h3>3.3&nbsp;&nbsp;Augmentation</h3>
+<p>The recorded sessions contain no calculator use, no recovery from failed searches, and only one fixed client directory. I added these behaviors deterministically, without generating any text with a model:</p>
+<ul>
+  <li><b>Calculator insertion.</b> When the answer states a figure <i>x</i> that does not appear in the evidence but equals <i>a</i>&minus;<i>b</i>, <i>a</i>+<i>b</i>, <i>a</i>+<i>b</i>+<i>c</i>, or <i>a</i>/2 for figures <i>a</i>, <i>b</i>, <i>c</i> that do appear, I insert a <code>calculate</code> call together with the tool's actual output. This version replaces the original session (58 of 119).</li>
+  <li><b>Empty-result recovery.</b> For each session I prepend a search that uses a plausible but wrong folder name and returns <code>{"results": []}</code>, followed by the original trajectory (119 sessions).</li>
+  <li><b>Directory variants.</b> For each session I build a system prompt whose client directory is shuffled and subsampled to between 30% and 100% of its entries, while always including the folders that session needs. This discourages memorizing the directory (119 sessions).</li>
+</ul>
+<p>Together these yield 357 examples, with median length 8.8k tokens and maximum 22.3k. I assign folds by <code>GroupKFold(5)</code> over client folders, so a client appears in exactly one fold. Folds 0, 2, and 3 (231 examples) are used for training. Folds 1 and 4 (42 questions from unseen clients) are held out for evaluation.</p>
+
+<h2>4&nbsp;&nbsp;Training</h2>
+<p>Each example is rendered through the model's own chat template, including the tool definitions. The loss is masked to assistant spans, which contain the tool-call JSON and the final answer. System, user, and tool turns are labeled <code>&minus;100</code>, so the gradient never rewards reproducing retrieved document text. I locate assistant spans by tokenizing successive prefixes of the conversation and taking the difference. A decode-back check asserts that the supervised span contains the reference answer.</p>
+<p>The base model is quantized to 4-bit NF4 with double quantization and bf16 compute. LoRA adapters (<i>r</i>&nbsp;=&nbsp;16, &alpha;&nbsp;=&nbsp;32, dropout 0.05) are attached to the q, k, v, o, gate, up, and down projections, for 29.1M trainable parameters (0.32%). I used AdamW with learning rate 10<sup>&minus;4</sup>, cosine decay, and 5% warmup, a batch size of 1 with 16 gradient-accumulation steps, and 2 epochs, giving 30 optimizer steps. I did not pack sequences or truncate them.</p>
+
+<h3>4.1&nbsp;&nbsp;Long-context memory</h3>
+<p>At 22k tokens, two transient tensors dominated peak memory. The first is the logits tensor, whose size is the sequence length <i>L</i> times the vocabulary size <i>V</i> (about 152k); upcast to fp32 for the loss, it occupies roughly 16 GB. I compute the cross-entropy in blocks of 1,024 positions, each under gradient checkpointing, accumulating summed losses and token counts:</p>
+<div class="eq">&#8467; = ( &Sigma;<sub>b</sub> &Sigma;<sub>t&isin;b</sub> CE(W<sub>out</sub>h<sub>t</sub>, y<sub>t</sub>) ) / |{t : y<sub>t</sub> &ne; &minus;100}|</div>
+<p>The result is identical to the unchunked loss. The second is attention. The model's full-attention layers use a head dimension of 256, for which the installed PyTorch build provides no flash or memory-efficient backward kernel on the training hardware. The scaled-dot-product attention dispatcher silently fell back to the math kernel, which materializes an <i>L</i>&times;<i>L</i> score matrix (about 18 GB per layer at 22k tokens). I registered a replacement attention implementation that processes query blocks of 1,024 against their causal key prefix, with each block checkpointed so that backward recomputes one score block at a time. Together with layer-level gradient checkpointing, these changes reduced peak memory on the longest example from out-of-memory at 80 GB to about 25 GB. Training loss fell from 5.59 to 2.18 over the 30 steps.</p>
+
+<h2>5&nbsp;&nbsp;Evaluation</h2>
+<h3>5.1&nbsp;&nbsp;Protocol</h3>
+<p>Every model receives the same system prompt and tool schemas and is served by vLLM with FP8 weights, greedy decoding, and thinking disabled. In the replayed-evidence condition, the recorded search calls and their responses are inserted into the context, so all models condition on identical retrieved evidence. The model then has up to five further rounds. A <code>calculate</code> call is executed by an evaluator that implements the same grammar as the MCP tool. A repeated search receives a fixed notice that search is unavailable. An LLM grader compares each final answer with the CPA reference using the benchmark's rubric, which assigns a correct or incorrect verdict and a score from 0 to 100. A human reviewer audited the grader's verdicts in depth. Tool use is scored separately, on the model's first call when it is shown only the question and tool schemas.</p>
+
+<h3>5.2&nbsp;&nbsp;Base-model selection</h3>
+<div class="tblwrap">
+<table>
+  <caption><b>Table 1.</b> Base models on 119 questions under replayed evidence, without tool execution. Accuracy is graded against the CPA reference answers.</caption>
+  <thead><tr><th>Model</th><th class="r">Correct</th><th class="r">Accuracy</th><th class="r">Mean score</th></tr></thead>
+  <tbody>
+    <tr><td>Qwen3.5-9B</td><td class="r">104</td><td class="r">87.4%</td><td class="r">87.2</td></tr>
+    <tr><td>Qwen3.5-4B</td><td class="r">92</td><td class="r">77.3%</td><td class="r">75.8</td></tr>
+    <tr><td>Gemma-4-E4B-it</td><td class="r">90</td><td class="r">75.6%</td><td class="r">78.1</td></tr>
+    <tr><td>Granite-4.1-8B</td><td class="r">79</td><td class="r">66.4%</td><td class="r">67.1</td></tr>
+  </tbody>
+</table>
+</div>
+<p>I selected Qwen3.5-9B. In the base models, failures were dominated by missing answers rather than wrong ones. Granite left 32 questions unanswered and was correct on 79 of the 87 it answered. Qwen3.5-9B was correct on 104 of the 112 it answered.</p>
+
+<h3>5.3&nbsp;&nbsp;Failure analysis</h3>
+<div class="tblwrap">
+<table>
+  <caption><b>Table 2.</b> Failure analysis of the 48 questions missed by at least one base model. "Instances" counts question&ndash;model pairs.</caption>
+  <thead><tr><th>Remedy required</th><th class="r">Questions</th><th class="r">Instances</th><th class="r">Qwen3.5-9B</th></tr></thead>
+  <tbody>
+    <tr><td>Arithmetic over figures present in the evidence</td><td class="r">20</td><td class="r">60 (54%)</td><td class="r">10 / 15</td></tr>
+    <tr><td>Extraction, retrieval, or completeness</td><td class="r">21</td><td class="r">38 (34%)</td><td class="r">4 / 15</td></tr>
+    <tr><td>Statutory knowledge absent from the documents</td><td class="r">6</td><td class="r">11 (10%)</td><td class="r">1 / 15</td></tr>
+    <tr><td>Defective reference answer</td><td class="r">1</td><td class="r">2 (2%)</td><td class="r">0 / 15</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The arithmetic category consists mostly of effective-tax-rate questions. In these the model either stated an incorrect percentage alongside correct operands or produced no answer. This distribution is the basis for supporting arithmetic with a deterministic tool rather than adding a broader tax-rules toolset.</p>
+
+<h3>5.4&nbsp;&nbsp;Held-out comparison</h3>
+<div class="tblwrap">
+<table>
+  <caption><b>Table 3.</b> Matched comparison on 42 held-out questions under replayed evidence with executed <code>calculate</code> calls. "Broken" counts questions the base model answered correctly that the fine-tuned model answers incorrectly.</caption>
+  <thead><tr><th>Model</th><th class="r">Correct</th><th class="r">Accuracy</th><th class="r">Mean score</th><th class="r">Broken</th></tr></thead>
+  <tbody>
+    <tr><td>Qwen3.5-9B, base</td><td class="r">39 / 42</td><td class="r">92.9%</td><td class="r">92.5</td><td class="r">&mdash;</td></tr>
+    <tr><td>Qwen3.5-9B, fine-tuned</td><td class="r">41 / 42</td><td class="r">97.6%</td><td class="r">96.0</td><td class="r">0 / 39</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The fine-tuned model corrects two of the base model's three errors and introduces none. Only the weights differ between the two runs, so the difference is attributable to fine-tuning, but it amounts to two questions. On the first-call tool metrics (whether a tool was called, the correct tool chosen, the arguments valid against the schema, and the folder and tax-year filters correct), the fine-tuned model scored 42/42 on every metric and the base model 41/42. Both models invoked <code>calculate</code> on 1 of the 42 questions. The fine-tuned model's remaining error divides correctly, but uses income tax where the question asks for total tax. This is an operand-selection failure, which arithmetic tooling does not address.</p>
+
+<h3>5.5&nbsp;&nbsp;Effect of tool execution on the measurement</h3>
+<p>Under an earlier protocol, additional tool calls after the replayed evidence received no response. Under that protocol the two models tied at 38/42. The fine-tuned model's errors were mostly empty answers following tool calls that were never answered. When the calls were executed, those answers became correct. An offline evaluation that does not execute tool calls therefore measures a model that is prevented from carrying out the behavior it was trained to perform. I treat tool execution as a requirement of the evaluation protocol, not an optional detail.</p>
+
+<h2>6&nbsp;&nbsp;Limitations</h2>
+<p>The held-out set contains 42 questions, and the difference between the matched runs is two of them. I report no confidence intervals or repeated runs. Retrieval is held fixed by design, so these results characterize the generator rather than the end-to-end system. Grading relies on an LLM grader with human review, and the review found at least one reference answer that contradicts its own question. The data come from a single firm and a single tax year. Finally, aggregate accuracy does not show that the model abstains when evidence is insufficient, or that it is robust to misleading retrieved content.</p>
+
+<h2>7&nbsp;&nbsp;Future work</h2>
+<p>None of the following has been run. I plan to:</p>
+<ol>
+  <li>measure the rate of answers containing figures that no retrieved evidence supports;</li>
+  <li>test abstention on questions from which a required component has been removed;</li>
+  <li>test recovery from tool errors, timeouts, and malformed tool outputs;</li>
+  <li>test robustness to conflicting or deliberately misleading documents injected into retrieval;</li>
+  <li>scale the training corpus to 3,000&ndash;5,000 synthetic examples, evaluated on a sealed test set that is not examined during development.</li>
+</ol>
+
+<div class="fn"><p>All results are from de-identified evaluations on clients excluded from training. No client data appear in this report.</p></div>
+</div>
+
+</body>
+</html>
